@@ -1,0 +1,40 @@
+# Production overrides for the Oracle Always Free deployment. Use with:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Enforces the resource ceilings this repo was designed around and
+# disables the n8n profile by default until you've deliberately reached
+# Phase 10 of the README.
+version: "3.9"
+
+services:
+  hermes:
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Production-only: also require Postgres healthy before Hermes
+    # starts (base docker-compose.yml intentionally only requires
+    # Redis, since Postgres is optional pre-Phase-6 for local/dev use
+    # per docs/DEPLOYMENT.md — Compose merges depends_on maps, so this
+    # adds to, not replaces, the base file's redis dependency).
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis:
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  postgres:
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

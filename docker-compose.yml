@@ -1,0 +1,325 @@
+version: "3.9"
+
+networks:
+  edge:
+    driver: bridge
+  internal:
+    driver: bridge
+  data:
+    driver: bridge
+
+volumes:
+  redis-data:
+  pg-data:
+  n8n-data:
+  agent-workspaces:
+
+services:
+  # ── Edge layer ──────────────────────────────────────────────
+  cloudflared:
+    # Pinned to a real, verified-current release (checked Aug 2026 via
+    # Docker Hub). Bump deliberately — check
+    # https://hub.docker.com/r/cloudflare/cloudflared/tags before updating,
+    # don't just move to :latest.
+    image: cloudflare/cloudflared:2026.8.2
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${CF_TUNNEL_TOKEN}
+    networks: [edge]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+
+  caddy:
+    image: caddy:2.8-alpine
+    volumes:
+      - ./infrastructure/caddy/Caddyfile:/etc/caddy/Caddyfile
+    networks: [edge, internal]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+
+  # ── Data layer (never exposed to edge network) ──────────────
+  redis:
+    image: redis:7.4-alpine
+    command: redis-server --requirepass ${REDIS_PASSWORD} --maxmemory 256mb --maxmemory-policy allkeys-lru
+    networks: [data, internal]
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 320m
+
+  postgres:
+    image: postgres:16.4-alpine
+    environment:
+      - POSTGRES_PASSWORD=${DATABASE_PASSWORD}
+      - POSTGRES_DB=agentos
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    networks: [data, internal]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  # ── Orchestration ────────────────────────────────────────────
+  hermes:
+    build: ./services/hermes
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - DATABASE_URL=postgresql://postgres:${DATABASE_PASSWORD}@postgres:5432/agentos
+    networks: [internal]
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+
+  # ── Workers ──────────────────────────────────────────────────
+  opencode-worker:
+    build: ./services/workers/opencode
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+    volumes:
+      - agent-workspaces:/workspace
+    networks: [internal]
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  research-worker:
+    build: ./services/workers/research
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - MCP_URL=http://mcp:8100
+      - MODEL_ROUTER_URL=http://hermes:8000/internal/route
+    networks: [internal]
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+
+  creative-worker:
+    build: ./services/workers/creative
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - MODEL_ROUTER_URL=http://hermes:8000/internal/route
+    networks: [internal]
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+
+  # ── Agent OS 3.0 dedicated workers (opt-in profile) ─────────
+  rlm-worker:
+    build: ./services/workers/rlm
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - RLM_MAX_DEPTH=4
+    networks: [internal]
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: ["agent_os30"]
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+
+  browser-worker:
+    build: ./services/workers/browser
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - MCP_URL=http://mcp:8100
+    networks: [internal]
+    depends_on:
+      redis:
+        condition: service_healthy
+      mcp:
+        condition: service_started
+    restart: unless-stopped
+    profiles: ["agent_os30"]
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+
+  verification-worker:
+    build: ./services/workers/verification
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - DATABASE_URL=postgresql://postgres:${DATABASE_PASSWORD}@postgres:5432/agentos
+    networks: [internal]
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: ["agent_os30"]
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+
+  seo-worker:
+    build: ./services/workers/seo
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - MODEL_ROUTER_URL=http://hermes:8000/internal/route
+    networks: [internal]
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: ["agent_os30"]
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+
+  marketing-worker:
+    build: ./services/workers/marketing
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - MODEL_ROUTER_URL=http://hermes:8000/internal/route
+    networks: [internal]
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: ["agent_os30"]
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+
+  devops-worker:
+    build: ./services/workers/devops
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - MODEL_ROUTER_URL=http://hermes:8000/internal/route
+    networks: [internal]
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: ["agent_os30"]
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+
+  # ── Tools ────────────────────────────────────────────────────
+  mcp:
+    build: ./services/mcp
+    env_file: .env
+    environment:
+      - PLAYWRIGHT_URL=http://playwright:8200
+    volumes:
+      - agent-workspaces:/workspaces
+    networks: [internal]
+    restart: unless-stopped
+    healthcheck:
+      # Uses Python (already in the image) rather than adding curl as
+      # a new dependency just for this — services/mcp/gateway.py has
+      # a real /health endpoint this actually calls.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+
+  playwright:
+    build: ./services/playwright-service
+    networks: [internal]
+    tmpfs:
+      - /tmp/browser-artifacts
+    restart: unless-stopped
+    healthcheck:
+      # Same reasoning as mcp above — services/playwright-service/server.py
+      # has a real /health endpoint (checked in the app code, not invented
+      # for this healthcheck).
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8200/health', timeout=3)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+
+  # ── Automation (Phase 10+) ──────────────────────────────────
+  n8n:
+    # Pinned to a real, verified-current release (checked Aug 2026 via
+    # Docker Hub layer listing). Check
+    # https://hub.docker.com/r/n8nio/n8n/tags before bumping.
+    image: n8nio/n8n:1.82.1
+    env_file: .env
+    environment:
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_HOST=${N8N_HOST:-n8n.yourdomain.com}
+      - N8N_PROTOCOL=https
+      - WEBHOOK_URL=https://${N8N_HOST:-n8n.yourdomain.com}/
+    volumes:
+      - n8n-data:/home/node/.n8n
+    networks: [internal]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 400m
+    profiles: ["phase10"]   # `docker compose --profile phase10 up -d` to include

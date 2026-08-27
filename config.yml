@@ -1,0 +1,17 @@
+# Reference only. When using a Tunnel Token (recommended, see docker-compose.yml
+# cloudflared service), routing is configured in the Cloudflare Zero Trust
+# dashboard under Networks -> Tunnels -> your tunnel -> Public Hostnames,
+# and this file is not required by the container.
+#
+# Keeping this file in the repo as documentation of the intended routes,
+# and as a fallback if you ever switch to config-file-based tunnel mode.
+
+tunnel: agent-os-tunnel
+credentials-file: /etc/cloudflared/creds.json
+
+ingress:
+  - hostname: api.yourdomain.com
+    service: http://caddy:80
+  - hostname: n8n.yourdomain.com
+    service: http://caddy:80
+  - service: http_status:404

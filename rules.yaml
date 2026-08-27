@@ -1,0 +1,89 @@
+# Policy rules. Edit and call PolicyEngine.reload() (or restart Hermes)
+# to apply changes. Default posture is conservative: unknown/unlisted
+# actions require approval, not silent allow.
+
+default: REQUIRE_APPROVAL
+
+rules:
+  READ_FILE:
+    decision: ALLOW
+    reason: "read-only, low risk within an agent's own workspace"
+
+  WRITE_FILE:
+    decision: ALLOW
+    reason: "allowed within isolated agent workspace only — enforced by workspace.py path scoping"
+    require_approval_if_contains:
+      - "/etc/"
+      - "~/.ssh"
+      - ".env"
+
+  EXECUTE_COMMAND:
+    decision: REQUIRE_APPROVAL
+    reason: "shell execution is high risk by default"
+    deny_if_contains:
+      - "rm -rf"
+      - "curl | sh"
+      - "wget | sh"
+      - ":(){ :|:& };:"   # fork bomb
+      - "drop table"
+      - "drop database"
+
+  BROWSER_NAVIGATION:
+    decision: ALLOW
+    reason: "read/navigate is low risk; posting/submitting is gated separately under EXTERNAL_POST"
+
+  EXTERNAL_POST:
+    decision: REQUIRE_APPROVAL
+    reason: "anything published externally (Pinterest, Instagram, email, backlink pitch) needs a human sign-off until the evaluator has a strong track record"
+
+  GITHUB_WRITE:
+    decision: REQUIRE_APPROVAL
+    reason: "commits/PRs should be reviewed before landing, at least initially"
+
+  DEPLOYMENT:
+    decision: REQUIRE_APPROVAL
+    reason: "infra changes are high blast-radius"
+
+  CREDENTIAL_ACCESS:
+    decision: DENY
+    reason: "agents should never directly read raw credentials; MCP gateway injects them into scoped tool calls instead"
+
+  DATABASE_WRITE:
+    decision: REQUIRE_APPROVAL
+    reason: "structured state writes go through the evaluator-approved path; direct writes need review while the system is new"
+    deny_if_contains:
+      - "drop table"
+      - "truncate"
+      - "delete from"
+
+  # ── Mission Control permission classes (spec §12) ────────────────
+  # Risk tiers as specified: low-risk (read/search/analyze) auto;
+  # medium-risk (write/create changes) policy-controlled; high-risk
+  # (deploy/delete/publish/social/financial) explicit approval.
+  NETWORK:
+    decision: ALLOW
+    reason: "low-risk: outbound network calls for search/API reads are routine for a mission task"
+
+  BROWSER:
+    decision: ALLOW
+    reason: "low-risk: navigation/reading via Playwright; actual posting is gated under SOCIAL_POST separately"
+
+  GITHUB:
+    decision: REQUIRE_APPROVAL
+    reason: "medium-risk: same posture as GITHUB_WRITE above — repo changes need review"
+
+  DEPLOY:
+    decision: REQUIRE_APPROVAL
+    reason: "high-risk: production deployment always needs explicit approval"
+
+  SOCIAL_POST:
+    decision: REQUIRE_APPROVAL
+    reason: "high-risk: publishing externally (Pinterest, Instagram, etc.) needs a human sign-off"
+
+  FINANCIAL:
+    decision: REQUIRE_APPROVAL
+    reason: "high-risk: any action with financial effect always needs explicit approval, no exceptions carved out here"
+
+  DESTRUCTIVE:
+    decision: DENY
+    reason: "high-risk: destructive actions are never auto-approved even with human sign-off through this generic class — a specific, scoped policy rule should be added deliberately if a real destructive-but-safe action needs to exist, rather than broadly allowing this class"

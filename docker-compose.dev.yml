@@ -1,0 +1,29 @@
+# Local development overrides. Use with:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# Differences from prod:
+#  - ports published to localhost for direct curl/debugging
+#  - no Cloudflare tunnel required
+#  - relaxed resource limits (assumes you're on a dev machine, not the
+#    12GB Oracle box) so you're not fighting the ceiling while iterating
+version: "3.9"
+
+services:
+  hermes:
+    ports:
+      - "8000:8000"
+    deploy:
+      resources:
+        limits:
+          memory: 1024m
+
+  mcp:
+    ports:
+      - "8100:8100"
+
+  playwright:
+    ports:
+      - "8200:8200"
+
+  cloudflared:
+    profiles: ["disabled-in-dev"]   # effectively skips this service locally
