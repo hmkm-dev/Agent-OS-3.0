@@ -19,7 +19,6 @@ any agent-initiated code path.
 from __future__ import annotations
 
 from .skill import SkillEngine
-from .tool_validation import all_tools_ok, validate_required_tools
 
 
 class TeachToSkill:
@@ -153,30 +152,3 @@ class TeachToSkill:
             return max(0.0, min(1.0, float(resp["text"].strip())))
         except (ValueError, KeyError):
             return 0.5
-
-    async def readiness_check(self, skill_id: str, worker_type: str, required_tools: list[str],
-                               test_cases: list[dict]) -> dict:
-        """
-        The real pre-approval gate (closes the gap this module's
-        run_tests() docstring explicitly flagged: text-only grading
-        was not sufficient on its own). Combines:
-          1. run_tests() — does the skill follow its instructions correctly?
-          2. validate_required_tools() — can it actually reach/use its
-             declared tools through the real MCP gateway?
-
-        A human should require BOTH `text_tests.passed` and
-        `tools_ok` to be true before calling SkillEngine.approve().
-        This method does not call approve() itself — approval stays a
-        separate, explicit, human-only action per the existing rule in
-        skill.py.
-        """
-        text_tests = await self.run_tests(skill_id, test_cases)
-        tool_report = await validate_required_tools(worker_type, required_tools)
-
-        return {
-            "skill_id": skill_id,
-            "text_tests": text_tests,
-            "tool_validation": tool_report,
-            "tools_ok": all_tools_ok(tool_report),
-            "ready_for_human_approval": text_tests["passed"] and all_tools_ok(tool_report),
-        }

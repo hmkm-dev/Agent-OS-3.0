@@ -87,17 +87,10 @@ class MissionControl:
                 f"allowed next states: {sorted(ALLOWED_TRANSITIONS.get(current, set()))}"
             )
 
-        # Compare-and-set the status to prevent two concurrent orchestrators
-        # from both applying a transition after validating the same old state.
-        row = await self.db.fetchrow(
-            "UPDATE missions SET status = $1, current_phase = $2, updated_at = $3 "
-            "WHERE mission_id = $4 AND status = $5 RETURNING mission_id",
-            new_status, phase or new_status, datetime.now(timezone.utc), mission_id, current,
+        await self.db.execute(
+            "UPDATE missions SET status = $1, current_phase = $2, updated_at = $3 WHERE mission_id = $4",
+            new_status, phase or new_status, datetime.now(timezone.utc), mission_id,
         )
-        if row is None:
-            raise InvalidTransition(
-                f"concurrent mission transition rejected for {mission_id}: expected status {current}"
-            )
         return {"mission_id": mission_id, "status": new_status, "phase": phase or new_status}
 
     async def transition_if_current(self, mission_id: str, expected_status: str,

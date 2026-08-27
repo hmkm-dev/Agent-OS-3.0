@@ -55,3 +55,35 @@ rules:
       - "drop table"
       - "truncate"
       - "delete from"
+
+  # ── Mission Control permission classes (spec §12) ────────────────
+  # Risk tiers as specified: low-risk (read/search/analyze) auto;
+  # medium-risk (write/create changes) policy-controlled; high-risk
+  # (deploy/delete/publish/social/financial) explicit approval.
+  NETWORK:
+    decision: ALLOW
+    reason: "low-risk: outbound network calls for search/API reads are routine for a mission task"
+
+  BROWSER:
+    decision: ALLOW
+    reason: "low-risk: navigation/reading via Playwright; actual posting is gated under SOCIAL_POST separately"
+
+  GITHUB:
+    decision: REQUIRE_APPROVAL
+    reason: "medium-risk: same posture as GITHUB_WRITE above — repo changes need review"
+
+  DEPLOY:
+    decision: REQUIRE_APPROVAL
+    reason: "high-risk: production deployment always needs explicit approval"
+
+  SOCIAL_POST:
+    decision: REQUIRE_APPROVAL
+    reason: "high-risk: publishing externally (Pinterest, Instagram, etc.) needs a human sign-off"
+
+  FINANCIAL:
+    decision: REQUIRE_APPROVAL
+    reason: "high-risk: any action with financial effect always needs explicit approval, no exceptions carved out here"
+
+  DESTRUCTIVE:
+    decision: DENY
+    reason: "high-risk: destructive actions are never auto-approved even with human sign-off through this generic class — a specific, scoped policy rule should be added deliberately if a real destructive-but-safe action needs to exist, rather than broadly allowing this class"

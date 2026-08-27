@@ -23,6 +23,7 @@ import yaml
 DecisionResult = Literal["ALLOW", "DENY", "REQUIRE_APPROVAL"]
 
 ACTION_CATEGORIES = {
+    # Existing categories — unchanged from prior passes.
     "READ_FILE",
     "WRITE_FILE",
     "EXECUTE_COMMAND",
@@ -32,6 +33,18 @@ ACTION_CATEGORIES = {
     "DEPLOYMENT",
     "CREDENTIAL_ACCESS",
     "DATABASE_WRITE",
+    # Added for Mission Control's permission-class model (spec §12).
+    # These are broader classes a mission task can be tagged with;
+    # they coexist with the specific categories above rather than
+    # replacing them — e.g. a task doing EXTERNAL_POST also carries
+    # the SOCIAL_POST class for mission-level risk classification.
+    "NETWORK",
+    "BROWSER",
+    "GITHUB",
+    "DEPLOY",
+    "SOCIAL_POST",
+    "FINANCIAL",
+    "DESTRUCTIVE",
 }
 
 DEFAULT_RULES_PATH = os.path.join(os.path.dirname(__file__), "rules.yaml")

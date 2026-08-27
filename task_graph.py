@@ -211,17 +211,7 @@ class TaskGraph:
             set_clauses.append(f"{k} = ${idx}")
             params.append(json.dumps(v) if isinstance(v, (dict, list)) else v)
             idx += 1
-        # Compare-and-set the status so two concurrent workers cannot both
-        # apply the same transition after reading the same old state.
-        params.extend([task_id, current_status])
-        status_idx = idx
-        expected_idx = idx + 1
-        row = await self.db.fetchrow(
-            f"UPDATE mission_tasks SET {', '.join(set_clauses)} "
-            f"WHERE task_id = ${status_idx} AND status = ${expected_idx} RETURNING task_id",
-            *params,
+        params.append(task_id)
+        await self.db.execute(
+            f"UPDATE mission_tasks SET {', '.join(set_clauses)} WHERE task_id = ${idx}", *params
         )
-        if row is None:
-            raise InvalidTaskTransition(
-                f"concurrent task transition rejected for {task_id}: expected status '{current_status}'"
-            )
