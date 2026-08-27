@@ -57,7 +57,7 @@ fi
 echo "[test] confirmed marker is gone — proceeding to restore"
 
 echo "[test] running scripts/restore.sh..."
-bash scripts/restore.sh
+RESTORE_MODE=replace RESTORE_ALLOW_DESTRUCTIVE=yes bash scripts/restore.sh
 
 echo "[test] verifying marker row is back..."
 RESTORED=$($COMPOSE exec -T postgres psql -U postgres -d agentos -tAc \

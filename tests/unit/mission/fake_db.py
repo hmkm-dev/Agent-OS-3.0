@@ -169,6 +169,15 @@ class FakeDB:
         if q.startswith("SELECT * FROM missions WHERE mission_id"):
             return self.missions.get(args[0])
 
+        if q.startswith("UPDATE missions SET status = $1, current_phase = $2") and "RETURNING mission_id" in q:
+            new_status, phase, updated_at, mid, expected = args
+            mission = self.missions.get(mid)
+            if not mission or mission["status"] != expected:
+                return None
+            mission["status"] = new_status
+            mission["current_phase"] = phase
+            return FakeRow(mission_id=mid)
+
         if q.startswith("UPDATE missions SET retry_count"):
             updated_at, mid = args
             self.missions[mid]["retry_count"] += 1

@@ -13,6 +13,8 @@ from base_worker import BaseWorker
 
 WORKSPACE_ROOT = "/workspace"
 RUNTIME_NAME = os.environ.get("AGENT_RUNTIME", "opencode")
+DEFAULT_TIMEOUT_SECONDS = int(os.environ.get("OPENCODE_TIMEOUT_SECONDS", "100"))
+MAX_TIMEOUT_SECONDS = int(os.environ.get("OPENCODE_MAX_TIMEOUT_SECONDS", "900"))
 
 
 class OpenCodeWorker(BaseWorker):
@@ -39,7 +41,9 @@ class OpenCodeWorker(BaseWorker):
             if repo_url:
                 self._clone(repo_url, workspace_dir)
 
-            result = self.runtime.execute(instructions, workspace_dir, timeout_seconds=100)
+            requested_timeout = int(payload.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS))
+            timeout_seconds = max(1, min(requested_timeout, MAX_TIMEOUT_SECONDS))
+            result = self.runtime.execute(instructions, workspace_dir, timeout_seconds=timeout_seconds)
 
             return {
                 "exit_code": result.exit_code,

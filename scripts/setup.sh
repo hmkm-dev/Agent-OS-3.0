@@ -89,6 +89,11 @@ if [ "$missing" -eq 1 ] && [ "$MODE" = "prod" ]; then
 fi
 [ "$missing" -eq 0 ] && ok "all core required variables are set"
 
+if [ "$MODE" = "prod" ]; then
+  [ "${APP_ENV:-production}" != "development" ] || fail "APP_ENV=development is not permitted by strict production setup"
+  [ "${#HERMES_API_KEY}" -ge 32 ] || fail "HERMES_API_KEY must be at least 32 characters in production"
+fi
+
 echo "[setup] === Feature-scoped variable checks (informational only) ==="
 declare -A FEATURE_VARS=(
   ["Qdrant memory"]="QDRANT_URL QDRANT_API_KEY EMBEDDING_API_KEY"

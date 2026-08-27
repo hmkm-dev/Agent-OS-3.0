@@ -2,9 +2,11 @@ from pathlib import Path
 
 
 def _repo_root() -> Path:
-    # Resolve from this test file so pytest works from the repository root,
-    # its parent directory, or an IDE/CI working directory.
-    return Path(__file__).resolve().parents[3]
+    """Find the checkout regardless of whether this test is root-level or nested."""
+    for candidate in (Path(__file__).resolve(), *Path(__file__).resolve().parents):
+        if (candidate / "docker-compose.yml").is_file():
+            return candidate
+    raise RuntimeError("could not locate repository root")
 
 
 def test_agent_os30_compose_profile_declares_all_dedicated_workers():

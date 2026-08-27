@@ -10,6 +10,7 @@ only happen inside workers via the MCP gateway.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -22,7 +23,7 @@ from pydantic import BaseModel
 
 from agents.identity import AgentIdentity
 from approval.manager import ApprovalManager
-from db import DB
+from db import DB, close_pool
 from evaluator.evaluator import Evaluator
 from handoff.manager import HandoffError, HandoffManager
 from memory.pipeline import MemoryPipeline
@@ -39,9 +40,11 @@ from agent_os30.autonomy import AutonomyController, PersistentGoal, ResourceBudg
 from agent_os30.harness import ContinualHarness, RefinementRejected
 from agent_os30.prime import RLMManager, RLMResourceLimit
 from agent_os30.persistence import AgentOS30Store
+from observability import Observability, request_context
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/0")
 HERMES_API_KEY = os.environ.get("HERMES_API_KEY", "")
+APP_ENV = os.environ.get("APP_ENV", "development").lower()
 MAX_RETRIES = int(os.environ.get("MAX_AGENT_RETRIES", "3"))
 
 QUEUES = {
@@ -83,6 +86,17 @@ HANDOFF_CHAIN = {
 }
 
 app = FastAPI(title="Hermes")
+app.middleware("http")(request_context)
+observability = Observability(db)
+
+
+async def record_task_event(event_type: str, task: dict, **detail):
+    await observability.task_event(
+        event_type,
+        task_key=str(task.get("task_id")) if task.get("task_id") else None,
+        task_id=None,  # Redis task IDs are not rows in the legacy SQL tasks table yet.
+        detail={"task_type": task.get("type"), "status": task.get("status"), **detail},
+    )
 
 
 @app.on_event("startup")
@@ -135,24 +149,52 @@ async def reconcile_missions_after_restart():
     except Exception as exc:
         print(f"[hermes] startup mission reconciliation failed: {exc}")
 
+async def _worker_event_exporter():
+    """Drain bounded worker lifecycle events into Postgres when available."""
+    while True:
+        try:
+            item = await asyncio.to_thread(r.brpop, "queue:task_events", 1)
+            if not item:
+                continue
+            _, raw = item
+            event = json.loads(raw)
+            await observability.task_event(
+                event.get("event_type", "worker_event"),
+                task_key=str(event.get("task_id")) if event.get("task_id") else None,
+                detail=event,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"[hermes] worker event export failed: {exc}")
+            await asyncio.sleep(1)
+
+
 async def _agent_os30_scheduler_loop():
     while True:
         try:
             await autonomy_controller.scheduler.tick()
         except Exception as exc:
             print(f"[hermes] durable scheduler tick failed: {exc}")
-        await __import__("asyncio").sleep(1)
+        await asyncio.sleep(1)
 
 
 @app.on_event("startup")
 async def start_agent_os30_scheduler():
-    app.state.agent_os30_scheduler_task = __import__("asyncio").create_task(_agent_os30_scheduler_loop())
+    app.state.agent_os30_scheduler_task = asyncio.create_task(_agent_os30_scheduler_loop())
+    app.state.worker_event_exporter_task = asyncio.create_task(_worker_event_exporter())
 
 @app.on_event("shutdown")
 async def stop_agent_os30_scheduler():
-    task = getattr(app.state, "agent_os30_scheduler_task", None)
-    if task:
-        task.cancel()
+    for name in ("agent_os30_scheduler_task", "worker_event_exporter_task"):
+        task = getattr(app.state, name, None)
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+    await close_pool()
 
 ACTION_FOR_TYPE = {
     "opencode": "GITHUB_WRITE",       # conservative default; refine per-payload if needed
@@ -182,7 +224,9 @@ class ApprovalResolution(BaseModel):
 
 def check_api_key(x_api_key: Optional[str]):
     if not HERMES_API_KEY:
-        return  # unset — fine for local dev only, must be set before any real deployment
+        if APP_ENV in {"prod", "production"}:
+            raise HTTPException(status_code=503, detail="Hermes API authentication is not configured")
+        return  # development-only convenience; production fails closed
     if x_api_key != HERMES_API_KEY:
         raise HTTPException(status_code=401, detail="invalid API key")
 
@@ -256,11 +300,15 @@ async def create_task(task: TaskRequest, x_api_key: Optional[str] = Header(defau
         record["status"] = "cancelled"
         record["error"] = f"policy denied: {decision.reason}"
         r.set(f"task:{task_id}", json.dumps(record))
+        await observability.audit("task_policy", actor=task.agent_id or "system", resource=task_id, decision="deny", detail={"action": action, "reason": decision.reason})
+        await record_task_event("created", record, decision="deny", reason=decision.reason)
         raise HTTPException(status_code=403, detail=decision.reason)
 
     if decision.result == "REQUIRE_APPROVAL":
         record["status"] = "awaiting_approval"
         r.set(f"task:{task_id}", json.dumps(record))
+        await observability.audit("task_policy", actor=task.agent_id or "system", resource=task_id, decision="require_approval", detail={"action": action, "reason": decision.reason})
+        await record_task_event("created", record, decision="require_approval", reason=decision.reason)
         approval = await approval_manager.request(
             task_id=task_id, agent_id=task.agent_id, action=action, reason=decision.reason
         )
@@ -268,6 +316,8 @@ async def create_task(task: TaskRequest, x_api_key: Optional[str] = Header(defau
 
     r.set(f"task:{task_id}", json.dumps(record))
     r.lpush(QUEUES[task.type], task_id)
+    await observability.audit("task_policy", actor=task.agent_id or "system", resource=task_id, decision="allow", detail={"action": action})
+    await record_task_event("queued", record, queue=QUEUES[task.type])
     return {"task_id": task_id, "status": "queued"}
 
 
@@ -281,7 +331,7 @@ def get_task(task_id: str, x_api_key: Optional[str] = Header(default=None)):
 
 
 @app.post("/tasks/{task_id}/cancel")
-def cancel_task(task_id: str, x_api_key: Optional[str] = Header(default=None)):
+async def cancel_task(task_id: str, x_api_key: Optional[str] = Header(default=None)):
     check_api_key(x_api_key)
     raw = r.get(f"task:{task_id}")
     if not raw:
@@ -291,6 +341,8 @@ def cancel_task(task_id: str, x_api_key: Optional[str] = Header(default=None)):
         raise HTTPException(status_code=409, detail=f"task already terminal ({task['status']})")
     task["status"] = "cancelled"
     r.set(f"task:{task_id}", json.dumps(task))
+    await record_task_event("cancelled", task)
+    await observability.audit("task_cancel", actor="system", resource=task_id, decision="allow")
     return {"task_id": task_id, "status": "cancelled"}
 
 
@@ -342,10 +394,12 @@ async def trigger_evaluation(task_id: str, x_api_key: Optional[str] = Header(def
     if not raw:
         raise HTTPException(status_code=404, detail="task not found")
     task = json.loads(raw)
+    await record_task_event("evaluating", task)
     result = await evaluator.evaluate(task)
 
     if result["verdict"] == "pass":
         task["status"] = "completed"
+        await record_task_event("completed", task, verdict=result["verdict"])
         r.set(f"task:{task_id}", json.dumps(task))
 
         # Store a memory record of this successful task (closes the
@@ -378,11 +432,13 @@ async def trigger_evaluation(task_id: str, x_api_key: Optional[str] = Header(def
 
     elif result["verdict"] == "retry" and task.get("retries", 0) < MAX_RETRIES:
         task["status"] = "queued"
+        await record_task_event("retried", task, verdict=result["verdict"], retries=task.get("retries", 0) + 1)
         task["retries"] = task.get("retries", 0) + 1
         r.set(f"task:{task_id}", json.dumps(task))
         r.lpush(QUEUES[task["type"]], task_id)
     elif result["verdict"] == "require_human":
         task["status"] = "awaiting_approval"
+        await record_task_event("require_human", task, verdict=result["verdict"])
         r.set(f"task:{task_id}", json.dumps(task))
         await approval_manager.request(
             task_id=task_id, agent_id=task.get("agent_id"),
@@ -390,6 +446,7 @@ async def trigger_evaluation(task_id: str, x_api_key: Optional[str] = Header(def
         )
     else:
         task["status"] = "failed"
+        await record_task_event("failed", task, verdict=result["verdict"])
         r.set(f"task:{task_id}", json.dumps(task))
 
     return result

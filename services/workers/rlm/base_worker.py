@@ -24,6 +24,7 @@ import redis
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/0")
 RESULTS_QUEUE = "queue:results"
+TASK_EVENTS_QUEUE = "queue:task_events"
 DEAD_LETTER_QUEUE = "queue:failed"
 MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "3"))
 TASK_TIMEOUT_SECONDS = int(os.environ.get("TASK_TIMEOUT", "120"))
@@ -62,6 +63,37 @@ class BaseWorker(ABC):
     def handle(self, task: dict) -> dict:
         """Do the actual work. Raise on failure. Return a result dict on success."""
         raise NotImplementedError
+
+    def _emit_event(self, event_type: str, task_id: str, **detail):
+        """Publish a bounded lifecycle event without affecting task execution."""
+        event = {"event_type": event_type, "task_id": task_id, "worker_type": self.worker_type, **detail}
+        try:
+            self.r.lpush(TASK_EVENTS_QUEUE, json.dumps(event))
+            self.r.ltrim(TASK_EVENTS_QUEUE, 0, 9999)
+        except redis.exceptions.RedisError as exc:
+            print(f"[{self.worker_type}-worker] lifecycle event skipped: {exc}")
+
+    @property
+    def processing_queue(self):
+        return f"{self.queue_name}:processing"
+
+    def _requeue_inflight(self):
+        """Return only stale, unlocked tasks left by a crashed worker.
+
+        The processing list is shared by replicas of one worker type. A live
+        task still owns its Redis lock, so startup/recovery must never steal
+        it from another healthy replica.
+        """
+        for task_id in self.r.lrange(self.processing_queue, 0, -1):
+            if self.r.exists(f"task-lock:{task_id}"):
+                continue
+            raw = self.r.get(f"task:{task_id}")
+            if not raw or json.loads(raw).get("status") != "running":
+                self.r.lrem(self.processing_queue, 1, task_id)
+                continue
+            self.r.lpush(self.queue_name, task_id)
+            self.r.lrem(self.processing_queue, 1, task_id)
+            print(f"[{self.worker_type}-worker] requeued stale in-flight task {task_id}")
 
     def _heartbeat(self):
         now = time.time()
@@ -104,6 +136,7 @@ class BaseWorker(ABC):
         task = json.loads(raw)
         task["status"] = "running"
         task["started_at"] = time.time()
+        self._emit_event("started", task_id, status=task["status"])
         task["worker_id"] = self.worker_id
         self.r.set(f"task:{task_id}", json.dumps(task))
 
@@ -114,6 +147,7 @@ class BaseWorker(ABC):
             result = self.handle(task)
             task["status"] = "completed"
             task["result"] = result
+            self._emit_event("completed", task_id, status=task["status"])
         except TimeoutError_:
             self._retry_or_fail(task, f"task exceeded {TASK_TIMEOUT_SECONDS}s timeout")
         except Exception as e:
@@ -139,11 +173,13 @@ class BaseWorker(ABC):
         task["last_error"] = error
         if retries >= MAX_RETRIES:
             task["status"] = "failed"
+            self._emit_event("failed", task["task_id"], status=task["status"], retries=retries, error=error[-1000:])
             self.r.lpush(DEAD_LETTER_QUEUE, task["task_id"])
             print(f"[{self.worker_type}-worker] task {task['task_id']} failed permanently "
                   f"after {retries} retries -> dead-letter")
         else:
             task["status"] = "queued"
+            self._emit_event("retried", task["task_id"], status=task["status"], retries=retries, error=error[-1000:])
             self.r.lpush(self.queue_name, task["task_id"])
             print(f"[{self.worker_type}-worker] task {task['task_id']} failed "
                   f"(attempt {retries}/{MAX_RETRIES}), re-queued")
@@ -151,16 +187,33 @@ class BaseWorker(ABC):
     def run(self):
         print(f"[{self.worker_type}-worker] {self.worker_id} listening on {self.queue_name} "
               f"(max_retries={MAX_RETRIES}, timeout={TASK_TIMEOUT_SECONDS}s)")
+        try:
+            self._requeue_inflight()
+        except redis.exceptions.RedisError as e:
+            print(f"[{self.worker_type}-worker] could not recover in-flight tasks: {e}")
         while not self._shutdown:
-            self._heartbeat()
             try:
-                item = self.r.brpop(self.queue_name, timeout=5)
+                self._requeue_inflight()
+                self._heartbeat()
+            except redis.exceptions.RedisError as e:
+                print(f"[{self.worker_type}-worker] heartbeat unavailable: {e}")
+            try:
+                task_id = self.r.brpoplpush(self.queue_name, self.processing_queue, timeout=5)
             except redis.exceptions.RedisError as e:
                 print(f"[{self.worker_type}-worker] redis error: {e}, backing off 3s")
                 time.sleep(3)
                 continue
-            if item is None:
+            if task_id is None:
                 continue
-            _, task_id = item
-            self.process(task_id)
+            try:
+                self.process(task_id)
+            except redis.exceptions.RedisError as e:
+                print(f"[{self.worker_type}-worker] task {task_id} lost Redis access; leaving it for recovery: {e}")
+                time.sleep(3)
+                continue
+            finally:
+                try:
+                    self.r.lrem(self.processing_queue, 1, task_id)
+                except redis.exceptions.RedisError as e:
+                    print(f"[{self.worker_type}-worker] could not acknowledge {task_id}; restart recovery will retry: {e}")
         print(f"[{self.worker_type}-worker] {self.worker_id} shut down cleanly")
