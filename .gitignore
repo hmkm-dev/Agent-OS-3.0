@@ -1,0 +1,54 @@
+# Secrets — never commit real env values
+.env
+*.env
+!.env.example
+
+# Credentials of any kind
+*.pem
+*.key
+credentials/
+secrets/
+
+# Logs
+*.log
+logs/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Docker / runtime data (bind-mounted volumes if any go local)
+*.sqlite3
+data/
+volumes/
+
+# Browser/Playwright artifacts
+services/workers/research/browser-profile/
+*.har
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Backups pulled locally for testing
+*.sql.gz
+*.tar.gz
+
+# Local agent workspaces (runtime data, not source)
+/workspaces/
+
+.pytest_cache/
+*.pyo
+*.pyd__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

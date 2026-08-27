@@ -266,6 +266,8 @@ services:
     env_file: .env
     environment:
       - PLAYWRIGHT_URL=http://playwright:8200
+      - CRAWL4AI_ENABLED=${CRAWL4AI_ENABLED:-true}
+      - AGENTREACH_BIN=${AGENTREACH_BIN:-agent-reach}
     volumes:
       - agent-workspaces:/workspaces
     networks: [internal]

@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history needed for gitleaks to scan past commits
+
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: |
+          pip install pytest pytest-asyncio flake8 pyyaml httpx redis asyncpg boto3
+
+      - name: Verify shared-code sync is up to date
+        run: |
+          bash scripts/sync_shared.sh
+          if ! git diff --quiet; then
+            echo "::error::Canonical shared modules (agents/workspace.py, base_worker.py, "
+            echo "policy/approval/evaluator/memory/handoff/skill_engine) are out of sync "
+            echo "with their copies in services/hermes, services/mcp, services/workers/*."
+            echo "Run 'bash scripts/sync_shared.sh' locally and commit the result."
+            git diff --stat
+            exit 1
+          fi
+          echo "shared modules are in sync"
+
+      - name: Lint (flake8, errors only — not full style enforcement)
+        run: |
+          flake8 services agents --select=E9,F63,F7,F82 --show-source --statistics
+
+      - name: Unit tests
+        run: |
+          python -m pytest tests/unit -v -m "unit or not (integration or e2e or external)"
+
+      - name: E2E/external tests (expected to skip — no live infra or credentials in CI)
+        run: |
+          python -m pytest tests/e2e -v -m "e2e or external"
+          echo "The above MUST show all tests as 'skipped', never 'passed' — a real pass here ";
+          echo "would mean live credentials leaked into CI, which should never happen."
+
+      - name: Validate docker-compose config
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml config -q
+          docker compose -f docker-compose.yml -f docker-compose.dev.yml config -q
+
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    strategy:
+      matrix:
+        service: [hermes, mcp, workers/opencode, workers/research, workers/creative, playwright-service]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build ${{ matrix.service }} image
+        run: docker build -t agentos-${{ matrix.service }}:ci ./services/${{ matrix.service }}
+
+
+  docker-smoke:
+    runs-on: ubuntu-latest
+    needs: docker-build
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run real Docker/Compose core-stack smoke test
+        run: bash scripts/ci_smoke.sh

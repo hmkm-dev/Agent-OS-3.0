@@ -1,0 +1,42 @@
+# Caddy handles internal path-based routing.
+# Cloudflare Tunnel should point its public hostname at caddy:80.
+#
+# Production API convention (must match docs/CLOUDFLARE_DEPLOYMENT.md,
+# docs/ORACLE_DEPLOYMENT.md, docs/CONTABO_DEPLOYMENT.md,
+# scripts/verify_cloudflare_path.sh, and README examples — all of
+# which assume Hermes's own routes are reachable directly under the
+# domain root, e.g. https://api.yourdomain.com/health, NOT under a
+# /hermes/* prefix):
+#
+#   /mcp/*   -> MCP gateway (prefix stripped before forwarding)
+#   /n8n/*   -> n8n UI/webhooks (prefix stripped before forwarding)
+#   every other path -> Hermes directly (no prefix stripped) —
+#                       /health, /ready, /live, /tasks, /agents,
+#                       /approvals, /internal/route, etc.
+#
+# For Phase 1-3 (Hermes only, no MCP/n8n yet deployed), you can point
+# the Cloudflare Tunnel directly at hermes:8000 and skip Caddy
+# entirely if you prefer — this file only matters once you need
+# path-based routing to more than one internal service.
+
+:80 {
+	handle_path /mcp/* {
+		reverse_proxy mcp:8100
+	}
+
+	handle_path /n8n/* {
+		reverse_proxy n8n:5678
+	}
+
+	# Catch-all: everything not matched above goes straight to Hermes,
+	# unmodified path (no prefix stripping) — this is what makes
+	# https://api.yourdomain.com/health actually reach Hermes's /health.
+	handle {
+		reverse_proxy hermes:8000
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

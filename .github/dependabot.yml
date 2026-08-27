@@ -1,0 +1,97 @@
+# Dependency update automation. Every entry opens PRs only — nothing
+# here auto-merges or auto-deploys. CI (.github/workflows/ci.yml) must
+# pass on each PR before a human merges it; production images stay on
+# whatever's explicitly pinned in docker-compose.yml/Dockerfiles until
+# a PR from this bot (or a human) is reviewed and merged.
+version: 2
+updates:
+  # GitHub Actions versions used in workflows (e.g. actions/checkout@v4)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  # Docker base images — one entry per Dockerfile location, since
+  # Dependabot's docker ecosystem scans a directory's Dockerfile(s),
+  # not the whole repo recursively.
+  - package-ecosystem: "docker"
+    directory: "/services/hermes"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: "docker"
+    directory: "/services/mcp"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: "docker"
+    directory: "/services/playwright-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: "docker"
+    directory: "/services/workers/opencode"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+    # Node.js/OpenCode versions in this Dockerfile are pinned via
+    # explicit RUN commands (tarball download + npm install -g
+    # opencode-ai@<version>), not a Dockerfile FROM/image tag —
+    # Dependabot's docker ecosystem only tracks the base image
+    # (python:3.12.7-slim) here, not those inline pins. Bump the Node/
+    # OpenCode versions manually, deliberately, per the comments in
+    # that Dockerfile — do not let an automated PR silently change them.
+
+  - package-ecosystem: "docker"
+    directory: "/services/workers/research"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: "docker"
+    directory: "/services/workers/creative"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+
+  # Python dependencies (requirements.txt) — one entry per service,
+  # same reasoning as docker above.
+  - package-ecosystem: "pip"
+    directory: "/services/hermes"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "pip"
+    directory: "/services/mcp"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "pip"
+    directory: "/services/playwright-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "pip"
+    directory: "/services/workers/opencode"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "pip"
+    directory: "/services/workers/research"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "pip"
+    directory: "/services/workers/creative"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5

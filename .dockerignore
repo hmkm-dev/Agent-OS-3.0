@@ -1,0 +1,47 @@
+# Root .dockerignore. NOTE: every service in docker-compose.yml builds
+# with its OWN subdirectory as context (e.g. `./services/hermes`), not
+# this repo root — see each service's per-directory .dockerignore for
+# what actually applies to real builds. This root file exists for:
+# (a) hygiene/defense-in-depth if you ever build with `docker build .`
+#     from the repo root directly, and
+# (b) tooling that inspects the whole repo (some CI Docker layer
+#     scanners, IDE Docker integrations) that respects a root ignore file.
+
+.git
+.github
+.env
+*.env
+!.env.example
+__pycache__
+*.pyc
+.venv
+venv
+node_modules
+logs
+data
+volumes
+memory
+*.log
+*.sql.gz
+*.tar.gz
+
+# Runtime/browser/cache/generated artifacts that should never enter a
+# build context
+/workspaces
+services/playwright-service/browser-artifacts
+**/browser-artifacts
+*.har
+.pytest_cache
+.mypy_cache
+
+# Editor/OS junk
+.DS_Store
+Thumbs.db
+.vscode
+.idea
+
+# Docs/tests aren't needed inside any image
+docs
+tests
+*.md
+!README.md
