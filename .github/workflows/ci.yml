@@ -25,7 +25,15 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          pip install pytest pytest-asyncio flake8 pyyaml httpx redis asyncpg boto3
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest-asyncio flake8
+
+      - name: Compile Python sources
+        run: python -m compileall -q .
+
+      - name: Verify installed dependency consistency
+        run: python -m pip check
 
       - name: Verify shared-code sync is up to date
         run: |
