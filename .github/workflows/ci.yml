@@ -10,7 +10,7 @@ jobs:
   lint-and-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # full history needed for gitleaks to scan past commits
 
@@ -75,7 +75,7 @@ jobs:
       matrix:
         service: [hermes, mcp, workers/opencode, workers/research, workers/creative, playwright-service]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build ${{ matrix.service }} image
         run: docker build -t agentos-${{ matrix.service }}:ci ./services/${{ matrix.service }}
 
@@ -85,7 +85,7 @@ jobs:
     needs: docker-build
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Run real Docker/Compose core-stack smoke test
         run: bash scripts/ci_smoke.sh
