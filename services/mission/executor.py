@@ -25,12 +25,13 @@ from .verification_pipeline import VerificationPipeline
 from .failure_recovery import FailureRecovery
 from .strategy import StrategyManager, StrategyNotChangedError
 from .task_graph import TaskGraph
+from agent_os30.trajectory import TrajectoryRecorder, CheckpointStore
 
 MAX_MISSION_ITERATIONS = 500  # hard ceiling — never loop forever even if every other guard fails
 
 
 class MissionExecutor:
-    def __init__(self, db, redis_client, route_fn, queues: dict[str, str]):
+    def __init__(self, db, redis_client, route_fn, queues: dict[str, str], runtime_store=None):
         self.db = db
         self.r = redis_client
         self.route_fn = route_fn
@@ -43,6 +44,9 @@ class MissionExecutor:
         self.verification_pipeline = VerificationPipeline(db)
         self.failure_recovery = FailureRecovery(db)
         self.strategy_manager = StrategyManager(db)
+        self.runtime_store = runtime_store
+        self.trajectory = TrajectoryRecorder(runtime_store)
+        self.checkpoints = CheckpointStore(runtime_store)
 
     def _artifacts(self, mission_id: str) -> MissionArtifacts:
         a = MissionArtifacts(mission_id)
@@ -118,6 +122,9 @@ class MissionExecutor:
                 raise
             dispatched.append(task["task_id"])
             self._artifacts(mission_id).append_progress(f"dispatched task: {task['description']}")
+            if self.runtime_store:
+                await self.trajectory.record_durable(mission_id=mission_id, task_id=task["task_id"], actor="hermes", event_type="task_dispatched", payload={"execution_id": execution_id, "hermes_task_id": hermes_task_id, "executor": executor_type})
+                await self.checkpoints.save_durable(mission_id, {"task_id": task["task_id"], "execution_id": execution_id, "status": "dispatched"}, label="task-dispatched")
 
         return dispatched
 
@@ -151,6 +158,9 @@ class MissionExecutor:
                     outputs=hermes_task_record.get("result"), completed_at=datetime.now(timezone.utc),
                 )
                 self._artifacts(mission_id).append_progress(f"PASSED: {mission_task['description']}")
+                if self.runtime_store:
+                    await self.trajectory.record_durable(mission_id=mission_id, task_id=mission_task_id, actor="hermes", event_type="task_verified", payload={"verification": verification})
+                    await self.checkpoints.save_durable(mission_id, {"task_id": mission_task_id, "status": "passed", "verification": verification}, label="task-verified")
                 return {"action": "advance", "verification": verification}
             if verification["status"] == "verification_pending":
                 await self.task_graph.update_status(
@@ -176,6 +186,8 @@ class MissionExecutor:
         self._artifacts(mission_id).append_failure(
             mission_task["description"], diagnosis["category"], diagnosis["reason"]
         )
+        if self.runtime_store:
+            await self.trajectory.record_durable(mission_id=mission_id, task_id=mission_task_id, actor="hermes", event_type="task_failed", payload={"category": diagnosis["category"], "reason": diagnosis["reason"]})
 
         if diagnosis["action"] == "escalate":
             await self.task_graph.update_status(mission_task_id, "blocked", errors=[error_text])
