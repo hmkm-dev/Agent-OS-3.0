@@ -25,7 +25,10 @@ from .verification_pipeline import VerificationPipeline
 from .failure_recovery import FailureRecovery
 from .strategy import StrategyManager, StrategyNotChangedError
 from .task_graph import TaskGraph
-from agent_os30.trajectory import TrajectoryRecorder, CheckpointStore
+try:
+    from agent_os30.trajectory import TrajectoryRecorder, CheckpointStore
+except ModuleNotFoundError:  # legacy root tests import services/mission directly
+    from services.hermes.agent_os30.trajectory import TrajectoryRecorder, CheckpointStore
 
 MAX_MISSION_ITERATIONS = 500  # hard ceiling — never loop forever even if every other guard fails
 
@@ -87,11 +90,23 @@ class MissionExecutor:
                     params = json.loads(params)
                 strategy_note = f"\n\n[Retry strategy v{strategy['version']}: {params}]"
 
+            required_tools = task.get("required_tools") or []
+            if isinstance(required_tools, str):
+                required_tools = json.loads(required_tools)
             payload = {
                 "instructions": task["description"] + strategy_note,
                 "objective": task.get("objective"),
                 "mission_id": mission_id,
                 "mission_task_id": task["task_id"],
+                "required_tools": required_tools,
+                "memory_query": task.get("objective") or task["description"],
+                "capability_request": {
+                    "execution_id": execution_id,
+                    "mission_id": mission_id,
+                    "mission_task_id": task["task_id"],
+                    "required_tools": required_tools,
+                    "budget": {"timeout_seconds": 120, "max_tool_calls": 50, "max_subagents": 0},
+                },
             } if executor_type == "opencode" else {
                 "query": task["description"] + strategy_note,
                 "mission_id": mission_id,

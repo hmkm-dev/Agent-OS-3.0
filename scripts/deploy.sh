@@ -35,10 +35,19 @@ echo "[deploy] running migrations..."
 bash scripts/run_migrations.sh
 
 echo "[deploy] starting workers + tools..."
-$COMPOSE up -d opencode-worker research-worker creative-worker mcp playwright
+if [ "${HYBRID_MODE:-0}" = "1" ]; then
+  echo "[deploy] HYBRID_MODE=1: starting OpenCode universal executor; specialist workers remain available but dormant"
+  $COMPOSE up -d opencode-worker mcp playwright
+else
+  $COMPOSE up -d opencode-worker research-worker creative-worker mcp playwright
+fi
 
-echo "[deploy] running healthcheck (production mode)..."
-HEALTHCHECK_MODE=production bash scripts/healthcheck.sh
+echo "[deploy] running healthcheck..."
+if [ "${HYBRID_MODE:-0}" = "1" ]; then
+  HEALTHCHECK_MODE=hybrid bash scripts/healthcheck.sh
+else
+  HEALTHCHECK_MODE=production bash scripts/healthcheck.sh
+fi
 
 echo "[deploy] done. n8n is NOT started by this script — run:"
 echo "  docker compose --profile phase10 up -d n8n"

@@ -23,7 +23,9 @@ PLAYWRIGHT_URL = os.environ.get("PLAYWRIGHT_URL", "http://playwright:8200")
 app = FastAPI(title="MCP Gateway")
 
 ALLOWLIST = {
-    "opencode": {"filesystem", "github"},
+    # OpenCode is the universal executor, but Hermes-issued capability
+    # requests and this gateway allowlist remain required for every call.
+    "opencode": {"filesystem", "github", "search", "playwright", "crawl4ai", "agentreach"},
     "research": {"search", "playwright", "crawl4ai", "agentreach"},
     "browser": {"playwright"},
     "creative": {"search", "crawl4ai"},

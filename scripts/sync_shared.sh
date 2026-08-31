@@ -36,8 +36,10 @@ cp services/memory/pipeline.py services/hermes/memory/pipeline.py
 cp services/handoff/manager.py services/hermes/handoff/manager.py
 touch services/hermes/memory/__init__.py services/hermes/handoff/__init__.py
 
-echo "[sync] agent_runtime -> services/workers/opencode/"
+echo "[sync] agent_runtime + capability contracts -> services/workers/opencode/"
 cp services/runtime/agent_runtime.py services/workers/opencode/agent_runtime.py
+cp services/runtime/capability_contract.py services/workers/opencode/capability_contract.py
+cp services/runtime/mcp_client.py services/workers/opencode/mcp_client.py
 
 echo "[sync] done (phase A/B/C additions)"
 

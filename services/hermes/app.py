@@ -31,6 +31,8 @@ from mission.control import InvalidTransition, MissionControl
 from mission.cost_tracker import CostTracker
 from mission.decomposition import DecompositionError, GoalDecomposer
 from mission.executor import MissionExecutor
+from result_consumer import ResultConsumer
+from skill_engine.skill import SkillEngine
 from mission.failure_recovery import FailureRecovery
 from mission.mission_evaluator import MissionEvaluator
 from mission.task_graph import CyclicDependencyError, TaskGraph
@@ -61,8 +63,9 @@ evaluator = Evaluator(db, route_fn=route, policy_engine=policy_engine)
 identity = AgentIdentity(db)
 handoff_manager = HandoffManager(db, r, QUEUES)
 memory_pipeline = MemoryPipeline(db)
-
+skill_engine = SkillEngine(db)
 mission_control = MissionControl(db)
+
 task_graph = TaskGraph(db)
 goal_decomposer = GoalDecomposer(db, route)
 mission_evaluator = MissionEvaluator(db, route)
@@ -179,14 +182,52 @@ async def _agent_os30_scheduler_loop():
         await asyncio.sleep(1)
 
 
+async def _consume_result(task_id: str) -> None:
+    """Evaluate one terminal worker result and advance its mission once."""
+    raw = r.get(f"task:{task_id}")
+    if not raw:
+        return
+    task = json.loads(raw)
+    mission_id = task.get("payload", {}).get("mission_id")
+    mission_task_id = task.get("payload", {}).get("mission_task_id")
+    if mission_id and mission_task_id:
+        verdict = await evaluator.evaluate(task)
+        await mission_executor.process_completed_hermes_task(mission_task_id, task, verdict)
+        return
+    await trigger_evaluation(task_id, x_api_key=HERMES_API_KEY)
+
+
+async def _result_consumer_loop():
+    await ResultConsumer(r, _consume_result).run()
+
+
+async def _mission_driver_loop():
+    """Continue only missions already in EXECUTING state."""
+    while True:
+        try:
+            for mission in await mission_control.list_active():
+                if mission.get("status") == "EXECUTING":
+                    try:
+                        await execute_mission_step(mission["mission_id"], x_api_key=HERMES_API_KEY)
+                    except (InvalidTransition, HTTPException) as exc:
+                        print(f"[hermes] mission driver skipped {mission['mission_id']}: {exc}")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"[hermes] mission driver error: {exc}")
+        await asyncio.sleep(2)
+
+
 @app.on_event("startup")
 async def start_agent_os30_scheduler():
     app.state.agent_os30_scheduler_task = asyncio.create_task(_agent_os30_scheduler_loop())
     app.state.worker_event_exporter_task = asyncio.create_task(_worker_event_exporter())
+    app.state.result_consumer_task = asyncio.create_task(_result_consumer_loop())
+    app.state.mission_driver_task = asyncio.create_task(_mission_driver_loop())
 
 @app.on_event("shutdown")
 async def stop_agent_os30_scheduler():
-    for name in ("agent_os30_scheduler_task", "worker_event_exporter_task"):
+    for name in ("agent_os30_scheduler_task", "worker_event_exporter_task", "result_consumer_task", "mission_driver_task"):
         task = getattr(app.state, name, None)
         if task:
             task.cancel()
@@ -215,6 +256,12 @@ class RouteRequest(BaseModel):
     task_type: str
     prompt: str
     max_tokens: Optional[int] = 2000
+
+
+class MemoryContextRequest(BaseModel):
+    query: str
+    agent_id: str = "opencode"
+    top_k: int = 5
 
 
 class ApprovalResolution(BaseModel):
@@ -274,6 +321,31 @@ async def internal_route(req: RouteRequest, x_api_key: Optional[str] = Header(de
         return await route(req.task_type, req.prompt, req.max_tokens or 2000)
     except ModelRouterError as e:
         raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/internal/skills/{skill_name}")
+async def internal_approved_skill(skill_name: str, x_api_key: Optional[str] = Header(default=None)):
+    """Return only an approved skill version to an executor."""
+    check_api_key(x_api_key)
+    skill = await skill_engine.get_latest_approved(skill_name)
+    if not skill:
+        raise HTTPException(status_code=404, detail="approved skill not found")
+    return skill
+
+
+@app.post("/internal/memory/context")
+async def internal_memory_context(req: MemoryContextRequest, x_api_key: Optional[str] = Header(default=None)):
+    """Return relevant memory through Hermes; credentials stay server-side."""
+    check_api_key(x_api_key)
+    if not req.query.strip():
+        raise HTTPException(status_code=400, detail="query is required")
+    try:
+        context = await memory_pipeline.retrieve_relevant_memory(
+            req.query, agent_id=req.agent_id, top_k=max(1, min(req.top_k, 20))
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"memory unavailable: {exc}") from exc
+    return {"context": context}
 
 
 @app.post("/tasks")

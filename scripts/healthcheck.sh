@@ -9,6 +9,9 @@
 #                     else is OPTIONAL/not-yet-deployed, matching
 #                     local iterative development where you bring up
 #                     services one phase at a time.
+#   hybrid        — redis, postgres, hermes, opencode-worker, mcp,
+#                     and playwright are REQUIRED; specialist workers
+#                     remain optional/dormant for resource efficiency.
 #   production     — redis, postgres, hermes, opencode-worker,
 #                     research-worker, creative-worker, mcp, and
 #                     playwright are ALL REQUIRED. caddy+cloudflared
@@ -104,6 +107,11 @@ if [ "$MODE" = "production" ]; then
   else
     REQ_EDGE="optional"
   fi
+elif [ "$MODE" = "hybrid" ]; then
+  REQ_DATA="required"
+  REQ_WORKERS="optional"
+  REQ_TOOLS="required"
+  REQ_EDGE="optional"
 else
   REQ_DATA="optional"
   REQ_WORKERS="optional"
