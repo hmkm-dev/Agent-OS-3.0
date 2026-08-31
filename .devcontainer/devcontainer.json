@@ -1,0 +1,7 @@
+{
+  "name": "Agent OS Docker Validation",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:4": {}
+  }
+}
