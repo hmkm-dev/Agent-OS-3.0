@@ -35,7 +35,7 @@ echo "[deploy] running migrations..."
 bash scripts/run_migrations.sh
 
 echo "[deploy] starting workers + tools..."
-if [ "${HYBRID_MODE:-0}" = "1" ]; then
+if [ "${HYBRID_MODE:-1}" = "1" ]; then
   echo "[deploy] HYBRID_MODE=1: starting OpenCode universal executor; specialist workers remain available but dormant"
   $COMPOSE up -d opencode-worker mcp playwright
 else
@@ -43,7 +43,7 @@ else
 fi
 
 echo "[deploy] running healthcheck..."
-if [ "${HYBRID_MODE:-0}" = "1" ]; then
+if [ "${HYBRID_MODE:-1}" = "1" ]; then
   HEALTHCHECK_MODE=hybrid bash scripts/healthcheck.sh
 else
   HEALTHCHECK_MODE=production bash scripts/healthcheck.sh

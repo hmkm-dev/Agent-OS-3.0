@@ -14,6 +14,7 @@ works; it does not reimplement task execution.
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 
@@ -76,7 +77,14 @@ class MissionExecutor:
         for task in ready:
             hermes_task_id = str(uuid.uuid4())
             execution_id = str(uuid.uuid4())
-            executor_type = task["assigned_executor"] or "opencode"
+            requested_executor = task["assigned_executor"] or "opencode"
+            executor_type = requested_executor
+            # In resource-efficient hybrid mode, OpenCode is the universal
+            # executor. Preserve the requested role in the payload so skill
+            # selection and rollback can still distinguish it, while routing
+            # execution to the live OpenCode queue.
+            if os.getenv("HYBRID_MODE", "0") == "1" and executor_type != "opencode":
+                executor_type = "opencode"
 
             # If this task has a recorded strategy (from a prior
             # strategy-changed retry), actually merge it into the
@@ -100,6 +108,7 @@ class MissionExecutor:
                 "mission_task_id": task["task_id"],
                 "required_tools": required_tools,
                 "memory_query": task.get("objective") or task["description"],
+                "capability_profile": requested_executor,
                 "capability_request": {
                     "execution_id": execution_id,
                     "mission_id": mission_id,
@@ -111,6 +120,7 @@ class MissionExecutor:
                 "query": task["description"] + strategy_note,
                 "mission_id": mission_id,
                 "mission_task_id": task["task_id"],
+                "capability_profile": requested_executor,
             }
 
             payload["execution_id"] = execution_id

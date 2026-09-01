@@ -4,6 +4,7 @@ either retried WITH a recorded strategy change, or escalated — never
 silently retried unchanged, and never retried forever.
 """
 import asyncio
+import json
 import os
 import sys
 
@@ -118,3 +119,34 @@ def test_passed_task_records_evidence_and_advances():
     updated_task = run(tg.get_task(tid))
     assert updated_task["status"] == "passed"
     assert len(db.mission_evidence) == 1
+
+
+def test_hybrid_mode_routes_specialist_task_to_opencode(monkeypatch):
+    # Import canonical services modules explicitly; this test directory also
+    # contains a legacy `mission` compatibility package that must not shadow
+    # the production executor under test.
+    from services.mission.control import MissionControl as CanonicalMissionControl
+    from services.mission.executor import MissionExecutor as CanonicalMissionExecutor
+    from services.mission.task_graph import TaskGraph as CanonicalTaskGraph
+
+    db = FakeDB()
+    redis = FakeRedis()
+    executor = CanonicalMissionExecutor(db, redis, fake_route, {"opencode": "queue:opencode"})
+    mc = CanonicalMissionControl(db)
+    tg = CanonicalTaskGraph(db)
+    monkeypatch.setenv("HYBRID_MODE", "1")
+    mission = run(mc.create_mission("research goal", success_criteria=["x"]))
+    task = run(tg.add_task(
+        mission["mission_id"],
+        "research a local fixture",
+        assigned_executor="research",
+        required_tools=["filesystem"],
+    ))
+
+    dispatched = run(executor.dispatch_ready_tasks(mission["mission_id"]))
+
+    assert dispatched == [task["task_id"]]
+    queued_id = redis.queues["queue:opencode"][0]
+    record = json.loads(redis.store[f"task:{queued_id}"])
+    assert record["type"] == "opencode"
+    assert record["payload"]["capability_profile"] == "research"
