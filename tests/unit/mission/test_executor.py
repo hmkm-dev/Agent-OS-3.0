@@ -140,7 +140,6 @@ def test_hybrid_mode_routes_specialist_task_to_opencode(monkeypatch):
         mission["mission_id"],
         "research a local fixture",
         assigned_executor="research",
-        required_tools=["filesystem"],
     ))
 
     dispatched = run(executor.dispatch_ready_tasks(mission["mission_id"]))
@@ -150,3 +149,30 @@ def test_hybrid_mode_routes_specialist_task_to_opencode(monkeypatch):
     record = json.loads(redis.store[f"task:{queued_id}"])
     assert record["type"] == "opencode"
     assert record["payload"]["capability_profile"] == "research"
+    assert record["payload"]["skill_name"] == "research"
+    assert record["payload"]["required_tools"] == ["search", "playwright"]
+
+
+def test_hybrid_mode_profiles_route_to_opencode_with_approved_capabilities(monkeypatch):
+    from services.mission.control import MissionControl as CanonicalMissionControl
+    from services.mission.executor import MissionExecutor as CanonicalMissionExecutor
+    from services.mission.task_graph import TaskGraph as CanonicalTaskGraph
+
+    monkeypatch.setenv("HYBRID_MODE", "1")
+    db = FakeDB()
+    redis = FakeRedis()
+    executor = CanonicalMissionExecutor(db, redis, fake_route, {"opencode": "queue:opencode"})
+    mc = CanonicalMissionControl(db)
+    tg = CanonicalTaskGraph(db)
+
+    for profile in ("seo", "marketing", "devops", "browser", "creative", "research"):
+        mission = run(mc.create_mission(f"{profile} goal", success_criteria=["x"]))
+        task = run(tg.add_task(mission["mission_id"], f"{profile} fixture task", assigned_executor=profile))
+        assert run(executor.dispatch_ready_tasks(mission["mission_id"])) == [task["task_id"]]
+
+    assert len(redis.queues["queue:opencode"]) == 6
+    records = [json.loads(redis.store[f"task:{task_id}"]) for task_id in redis.queues["queue:opencode"]]
+    assert {r["payload"]["capability_profile"] for r in records} == {
+        "seo", "marketing", "devops", "browser", "creative", "research"
+    }
+    assert all(r["type"] == "opencode" for r in records)

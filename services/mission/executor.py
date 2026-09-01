@@ -33,6 +33,18 @@ except ModuleNotFoundError:  # legacy root tests import services/mission directl
 
 MAX_MISSION_ITERATIONS = 500  # hard ceiling — never loop forever even if every other guard fails
 
+# These are capability declarations, not duplicate specialist workers. The
+# existing Skills/MCP gateway remain the implementation and authorization
+# boundaries; Hermes only supplies the approved profile metadata to OpenCode.
+HYBRID_CAPABILITY_PROFILES = {
+    "seo": {"skill_name": "seo", "required_tools": ["search", "playwright", "filesystem"]},
+    "marketing": {"skill_name": "marketing", "required_tools": ["search", "filesystem"]},
+    "devops": {"skill_name": "devops", "required_tools": ["filesystem", "github"]},
+    "browser": {"skill_name": "browser", "required_tools": ["playwright"]},
+    "creative": {"skill_name": "creative", "required_tools": ["filesystem"]},
+    "research": {"skill_name": "research", "required_tools": ["search", "playwright"]},
+}
+
 
 class MissionExecutor:
     def __init__(self, db, redis_client, route_fn, queues: dict[str, str], runtime_store=None):
@@ -101,6 +113,10 @@ class MissionExecutor:
             required_tools = task.get("required_tools") or []
             if isinstance(required_tools, str):
                 required_tools = json.loads(required_tools)
+            profile = HYBRID_CAPABILITY_PROFILES.get(requested_executor, {}) if executor_type == "opencode" else {}
+            if not required_tools and profile:
+                required_tools = list(profile["required_tools"])
+            skill_name = task.get("skill_name") or profile.get("skill_name")
             payload = {
                 "instructions": task["description"] + strategy_note,
                 "objective": task.get("objective"),
@@ -109,6 +125,7 @@ class MissionExecutor:
                 "required_tools": required_tools,
                 "memory_query": task.get("objective") or task["description"],
                 "capability_profile": requested_executor,
+                "skill_name": skill_name,
                 "capability_request": {
                     "execution_id": execution_id,
                     "mission_id": mission_id,
